@@ -1,0 +1,71 @@
+name: Asterisk 22.11.0 CI and deployment
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-test-publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+
+      - name: Build Asterisk from the pinned official source tag
+        run: docker build --pull --build-arg ASTERISK_VERSION=22.11.0 --tag icv-sip-connector:test .
+
+      - name: Verify version and container health
+        run: |
+          docker run --rm --entrypoint /usr/sbin/asterisk icv-sip-connector:test -V | grep -F 'Asterisk 22.11.0'
+          docker run -d --name asterisk-ci icv-sip-connector:test
+          for attempt in $(seq 1 45); do
+            status=$(docker inspect --format='{{.State.Health.Status}}' asterisk-ci)
+            if [ "$status" = "healthy" ]; then
+              docker rm -f asterisk-ci
+              exit 0
+            fi
+            if [ "$status" = "unhealthy" ]; then
+              docker logs asterisk-ci
+              docker rm -f asterisk-ci
+              exit 1
+            fi
+            sleep 2
+          done
+          docker logs asterisk-ci
+          docker rm -f asterisk-ci
+          exit 1
+
+      - name: Publish versioned image to GitHub Container Registry
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker tag icv-sip-connector:test ghcr.io/perrybc427/icvomnispace-sip-connector:22.11.0
+          docker push ghcr.io/perrybc427/icvomnispace-sip-connector:22.11.0
+          docker logout ghcr.io
+
+  deploy-to-kvm:
+    needs: build-test-publish
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && vars.HOSTINGER_DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Confirm the image can be pulled anonymously
+        run: docker pull ghcr.io/perrybc427/icvomnispace-sip-connector:22.11.0
+
+      - name: Deploy isolated connector to KVM 2
+        uses: hostinger/deploy-action@v1
+        with:
+          api-key: ${{ secrets.HOSTINGER_API_KEY }}
+          virtual-machine: '1888948'
+          project-name: icv-sip-connector
+          docker-compose-path: docker-compose.yml

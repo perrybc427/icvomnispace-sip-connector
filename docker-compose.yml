@@ -1,0 +1,31 @@
+services:
+  asterisk:
+    image: ghcr.io/perrybc427/icvomnispace-sip-connector:22.11.0
+    container_name: icv-sip-connector
+    pull_policy: always
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+    volumes:
+      - asterisk-data:/var/lib/asterisk
+      - asterisk-spool:/var/spool/asterisk
+      - asterisk-logs:/var/log/asterisk
+      - asterisk-run:/run/asterisk
+    healthcheck:
+      test: ["CMD-SHELL", "/usr/sbin/asterisk -rx 'core show uptime' >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+
+volumes:
+  asterisk-data:
+  asterisk-spool:
+  asterisk-logs:
+  asterisk-run:
